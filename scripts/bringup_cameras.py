@@ -1,56 +1,43 @@
+#!/usr/bin/env python3
 import time
-import cv2
+from fusionzero.drivers.camera import AsyncCamera, list_cameras, has_display
 
-from fusionzero.drivers.camera_csi import CsiCamera, list_csi_cameras, has_display
-
+SHOW_WINDOWS = True
 
 def main():
-    infos = list_csi_cameras()
-    print("Detected CSI cameras:")
-    for i, info in enumerate(infos):
-        print(f"  [{i}] {info}")
+    print("Cameras:")
+    for i, info in enumerate(list_cameras()):
+        print(f"  {i}: {info}")
 
-    if len(infos) < 2:
-        print("\nNeed 2 cameras detected. Run: rpicam-hello --list-cameras")
-        return
+    gui = bool(SHOW_WINDOWS and has_display())
+    if gui:
+        import cv2
+        cv2.namedWindow("Wide", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("AI", cv2.WINDOW_NORMAL)
 
-    cam0 = CsiCamera(0)
-    cam1 = CsiCamera(1)
-
-    gui = has_display()
-    last = time.perf_counter()
-    frames = 0
+    wide = AsyncCamera(0)  # uses defaults from camera.py
+    ai = AsyncCamera(1)
 
     try:
         while True:
-            f0 = cam0.read()
-            f1 = cam1.read()
+            fw = wide.read()
+            fa = ai.read()
 
-            frames += 1
-            now = time.perf_counter()
-            if now - last >= 1.0:
-                print(f"FPS(loop): {frames/(now-last):.1f}")
-                last = now
-                frames = 0
-
-            if gui:
-                cv2.imshow("CSI 0", f0)
-                cv2.imshow("CSI 1", f1)
-                key = cv2.waitKey(1) & 0xFF
-                if key in (ord("q"), ord("Q")):
+            if gui and fw is not None and fa is not None:
+                import cv2
+                cv2.imshow("Wide", cv2.cvtColor(fw, cv2.COLOR_RGB2BGR))
+                cv2.imshow("AI", cv2.cvtColor(fa, cv2.COLOR_RGB2BGR))
+                if (cv2.waitKey(1) & 0xFF) == ord("q"):
                     break
             else:
-                # headless fallback
-                cv2.imwrite("/tmp/csi0.jpg", f0)
-                cv2.imwrite("/tmp/csi1.jpg", f1)
-                time.sleep(0.2)
-
+                print(f"FPS wide={wide.fps():5.1f} ai={ai.fps():5.1f}")
+                time.sleep(1.0)
     finally:
-        cam0.close()
-        cam1.close()
+        wide.close()
+        ai.close()
         if gui:
+            import cv2
             cv2.destroyAllWindows()
-
 
 if __name__ == "__main__":
     main()

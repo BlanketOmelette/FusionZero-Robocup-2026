@@ -7,7 +7,7 @@ from fusionzero.drivers.tof_vl53l0x_multi import MultiVL53L0X
 from fusionzero.drivers.bno08x_imu import BNO08xIMU
 from fusionzero.drivers.touch_sensors import TouchSensors, TouchPins
 from fusionzero.drivers.oled_ssd1306 import OledDisplay, OledConfig
-from fusionzero.drivers.camera_csi import CsiCamera
+from fusionzero.drivers.camera_csi import Camera
 
 @dataclass
 class RobotConfig:
@@ -32,8 +32,8 @@ class Robot:
         self.i2c = busio.I2C(board.SCL, board.SDA)
 
         # Cameras
-        self.cam0 = CsiCamera(0, width=cfg.cam_width, height=cfg.cam_height)
-        self.cam1 = CsiCamera(1, width=cfg.cam_width, height=cfg.cam_height)
+        self.cam0 = Camera(0, width=cfg.cam_width, height=cfg.cam_height)
+        self.cam1 = Camera(1, width=cfg.cam_width, height=cfg.cam_height)
 
         # 3x ToF (forward no XSHUT, left/right with XSHUT)
         self.tof = MultiVL53L0X(
