@@ -8,6 +8,8 @@ sudo apt-get install -y rpi-usb-gadget
 
 # Enable gadget mode
 sudo rpi-usb-gadget on
+sudo rpi-usb-gadget off
+sudo rpi-usb-gadget on
 
 echo
 echo "[05] Enabled. Reboot required."
