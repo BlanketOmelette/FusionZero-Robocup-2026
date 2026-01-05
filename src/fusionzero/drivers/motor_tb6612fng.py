@@ -34,8 +34,8 @@ DEADBAND = 0.03
 DEFAULT_STOP: StopMode = "coast"
 
 # Make forward be (+,+)
-INVERT_LEFT = False
-INVERT_RIGHT = True
+INVERT_LEFT = True
+INVERT_RIGHT = False
 
 PWM_CHIP = 0  # usually 0
 
