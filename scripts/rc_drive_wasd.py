@@ -17,8 +17,7 @@ RAMP_PER_SEC = 2.5        # 0..1 per second ramp rate (smooth start/stop)
 PRINT_FPS_EVERY_S = 1.0
 # ====================
 
-
-def clamp(x, lo=-1.0, hi=1.0):
+def clamp(x, lo, hi):
     return lo if x < lo else hi if x > hi else x
 
 

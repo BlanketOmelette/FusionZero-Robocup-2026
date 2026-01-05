@@ -21,9 +21,10 @@ def list_cameras() -> List[Dict[str, Any]]:
 
 @dataclass(frozen=True)
 class CameraConfig:
-    # What you want to process
     out_size: Tuple[int, int] = (320, 200)
     out_format: str = "RGB888"  # OpenCV friendly, no cvtColor needed
+    crop: Optional[Tuple[int, int, int, int]] = (0, 0, 320, 200)  # (x, y, w, h)
+
 
     # If None, we pick defaults based on sensor model
     sensor_size: Optional[Tuple[int, int]] = None
@@ -37,9 +38,9 @@ class CameraConfig:
     queue: bool = False  # False avoids frame queue latency
 
     # Orientation
-    auto_orientation: bool = True
-    hflip: Optional[bool] = None
-    vflip: Optional[bool] = None
+    auto_orientation: bool = False
+    hflip: Optional[bool] = False
+    vflip: Optional[bool] = True
 
     # Exposure defaults: leave auto on
     ae_enable: bool = True
@@ -172,23 +173,31 @@ class Camera:
         return {}
 
     def _apply_model_defaults(self, cfg: CameraConfig, model: str) -> CameraConfig:
-        # Respect user overrides first
         sensor_size = cfg.sensor_size
         fps = cfg.fps
+        hflip = cfg.hflip
+        vflip = cfg.vflip
+        auto_orientation = cfg.auto_orientation
 
         if "imx708" in model:
-            # Wide view, fastest available: 2304x1296 ~56fps (your list shows (0,0)/4608x2592 crop)
             if sensor_size is None:
                 sensor_size = (2304, 1296)
             if fps is None:
                 fps = 56.0
+            # normal wide cam: no flip
+            auto_orientation = False
+            hflip = False
+            vflip = False
 
         elif "imx500" in model:
-            # AI camera limit: 2028x1520 30fps
             if sensor_size is None:
                 sensor_size = (2028, 1520)
             if fps is None:
                 fps = 30.0
+            # AI cam: flip vertically
+            auto_orientation = False
+            hflip = False
+            vflip = True
 
         else:
             if fps is None:
@@ -199,6 +208,9 @@ class Camera:
                 **cfg.__dict__,
                 "sensor_size": sensor_size,
                 "fps": fps,
+                "auto_orientation": auto_orientation,
+                "hflip": hflip,
+                "vflip": vflip,
             }
         )
 
@@ -225,6 +237,19 @@ class Camera:
         while self._running:
             try:
                 img = self.picam.capture_array("main")
+
+                if self.cfg.crop is not None:
+                    x, y, w, h = self.cfg.crop
+                    H, W = img.shape[0], img.shape[1]
+
+                    # clamp
+                    x = max(0, min(W, x))
+                    y = max(0, min(H, y))
+                    w = max(0, min(W - x, w))
+                    h = max(0, min(H - y, h))
+
+                    img = img[y:y + h, x:x + w]
+
             except Exception:
                 time.sleep(0.005)
                 continue
