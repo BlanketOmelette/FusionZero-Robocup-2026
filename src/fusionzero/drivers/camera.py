@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import os
 import time
-from dataclasses import dataclass
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple, List
 
 
 def has_display() -> bool:
@@ -13,209 +15,257 @@ def list_cameras() -> List[Dict[str, Any]]:
     try:
         from picamera2 import Picamera2
     except Exception as e:
-        raise ImportError(
-            "Picamera2 missing. Install with: sudo apt install -y python3-picamera2"
-        ) from e
+        raise ImportError("Picamera2 missing. Try: sudo apt install -y python3-picamera2") from e
     return list(Picamera2.global_camera_info())
 
 
 @dataclass(frozen=True)
 class CameraConfig:
-    # Output to your vision code
-    width: int = 320
-    height: int = 200
-    main_format: str = "RGB888"
+    # What you want to process
+    out_size: Tuple[int, int] = (320, 200)
+    out_format: str = "RGB888"  # OpenCV friendly, no cvtColor needed
 
-    # If fps is None, we auto select based on camera model:
-    # - imx708_wide -> 120 fps + sensor mode 1536x864
-    # - imx500      -> 30 fps (AI cam limit)
-    fps: Optional[int] = None
+    # If None, we pick defaults based on sensor model
+    sensor_size: Optional[Tuple[int, int]] = None
+    fps: Optional[float] = None
 
-    # Orientation
-    hflip: bool = False
-    vflip: bool = False
+    # If True, lock fps with FrameDurationLimits
+    lock_fps: bool = True
 
     # Low latency
-    buffer_count: int = 2
-    queue: bool = False
+    buffer_count: int = 4
+    queue: bool = False  # False avoids frame queue latency
 
-    # RAW (off by default for latency)
-    include_raw: bool = False
-    raw_size: Tuple[int, int] = (2304, 1296)
-    raw_format: str = "SBGGR10"
+    # Orientation
+    auto_orientation: bool = True
+    hflip: Optional[bool] = None
+    vflip: Optional[bool] = None
 
-    # Optional forced sensor mode (if None, driver may auto set it)
-    sensor_output_size: Optional[Tuple[int, int]] = None
-    sensor_bit_depth: int = 10
-
-    # Exposure controls
-    # If exposure_us is set, AeEnable will be disabled
+    # Exposure defaults: leave auto on
     ae_enable: bool = True
     awb_enable: bool = True
     exposure_us: Optional[int] = None
     analogue_gain: Optional[float] = None
 
-    # Auto defaults based on sensor model
-    auto_defaults: bool = True
-
-    # Startup settle
+    # Start up settle
     settle_s: float = 0.12
 
 
 class Camera:
     """
-    Picamera2 CSI camera wrapper with sensor-aware defaults.
+    Plug and play threaded camera.
 
-    Default behaviour (no config passed):
-    - IMX708 wide: 120 fps using sensor mode 1536x864, output scaled to 320x200
-    - IMX500 AI cam: 30 fps, output scaled to 320x200
+    Usage:
+        cam = Camera(0)
+        frame = cam.read()   # latest frame or None until first frame arrives
+        print(cam.fps)
+
+    Defaults:
+        imx708_wide: sensor 2304x1296, ~56 fps, wide view
+        imx500:      sensor 2028x1520, 30 fps
     """
 
-    def __init__(self, index: int, cfg: CameraConfig = CameraConfig()):
+    def __init__(self, index: int, cfg: Optional[CameraConfig] = None):
         try:
             from picamera2 import Picamera2
             from libcamera import Transform
         except Exception as e:
-            raise ImportError(
-                "Camera stack missing. Install with: sudo apt install -y python3-picamera2"
-            ) from e
+            raise ImportError("Camera stack missing. Try: sudo apt install -y python3-picamera2") from e
 
         self.index = int(index)
         self.picam = Picamera2(camera_num=self.index)
 
-        model = self._detect_model()
-        cfg = self._apply_auto_defaults(cfg, model)
-        self.cfg = cfg
+        info = self._get_global_info()
+        model = str(info.get("Model", "")).lower()
+        rotation = int(info.get("Rotation", 0) or 0)
 
-        transform = Transform(hflip=bool(cfg.hflip), vflip=bool(cfg.vflip))
+        if cfg is None:
+            cfg = CameraConfig()
+        cfg = self._apply_model_defaults(cfg, model)
 
-        main = {"size": (cfg.width, cfg.height), "format": cfg.main_format}
-        raw = {"size": cfg.raw_size, "format": cfg.raw_format} if cfg.include_raw else None
+        # Decide flips
+        hflip, vflip = self._resolve_flips(cfg, rotation)
 
-        fps = max(1, int(cfg.fps if cfg.fps is not None else 30))
-        frame_us = max(1, int(1_000_000 / fps))
+        transform = Transform(hflip=bool(hflip), vflip=bool(vflip))
 
-        controls: Dict[str, Any] = {
-            "FrameDurationLimits": (frame_us, frame_us),
-            "FrameRate": float(fps),  # ignored on some stacks, harmless otherwise
-        }
+        # Build configuration
+        main = {"size": cfg.out_size, "format": cfg.out_format}
 
-        # Exposure logic
-        if cfg.exposure_us is not None:
-            controls["AeEnable"] = False
-            controls["ExposureTime"] = int(cfg.exposure_us)
-            if cfg.analogue_gain is not None:
-                controls["AnalogueGain"] = float(cfg.analogue_gain)
-        else:
-            controls["AeEnable"] = bool(cfg.ae_enable)
-
-        controls["AwbEnable"] = bool(cfg.awb_enable)
-
+        # Force sensor mode to keep wide view / expected fps
         sensor = None
-        if cfg.sensor_output_size is not None:
-            sensor = {"output_size": cfg.sensor_output_size, "bit_depth": int(cfg.sensor_bit_depth)}
+        if cfg.sensor_size is not None:
+            sensor = {"output_size": cfg.sensor_size}
 
+        # Configure with preferred format, fallback if needed
         configured = False
         last_err: Optional[Exception] = None
 
-        # Try combinations: raw+sensor, no-raw+sensor, raw+no-sensor, no-raw+no-sensor
-        attempts = [(True, True), (False, True), (True, False), (False, False)]
-        for use_raw, use_sensor in attempts:
+        for fmt_try in (cfg.out_format, "RGB888"):
             try:
+                main_try = {"size": cfg.out_size, "format": fmt_try}
                 kwargs: Dict[str, Any] = dict(
-                    main=main,
+                    main=main_try,
                     transform=transform,
                     buffer_count=int(cfg.buffer_count),
                     queue=bool(cfg.queue),
-                    controls=controls,
                 )
-                if use_raw and raw is not None:
-                    kwargs["raw"] = raw
-                if use_sensor and sensor is not None:
+                if sensor is not None:
                     kwargs["sensor"] = sensor
 
                 video_cfg = self.picam.create_video_configuration(**kwargs)
                 self.picam.configure(video_cfg)
+                self._active_format = fmt_try
                 configured = True
                 break
             except Exception as e:
                 last_err = e
 
         if not configured:
-            raise RuntimeError(f"Failed to configure camera index {self.index} ({model}). Last error: {last_err}")
+            raise RuntimeError(f"Failed to configure camera {self.index}: {last_err}")
 
-        self.picam.start()
-        time.sleep(float(cfg.settle_s))
+        # Controls
+        controls: Dict[str, Any] = {
+            "AeEnable": bool(cfg.ae_enable),
+            "AwbEnable": bool(cfg.awb_enable),
+        }
+
+        if cfg.fps is not None and cfg.lock_fps:
+            frame_us = max(1, int(round(1_000_000 / float(cfg.fps))))
+            controls["FrameDurationLimits"] = (frame_us, frame_us)
+
+        if cfg.exposure_us is not None:
+            controls["AeEnable"] = False
+            controls["ExposureTime"] = int(cfg.exposure_us)
+            if cfg.analogue_gain is not None:
+                controls["AnalogueGain"] = float(cfg.analogue_gain)
 
         try:
             self.picam.set_controls(controls)
         except Exception:
+            # Not all controls are supported on all pipelines
             pass
 
-    def _detect_model(self) -> str:
-        # Best effort: pull model name from global info
-        try:
-            infos = list_cameras()
-            info = infos[self.index] if self.index < len(infos) else {}
-            for key in ("Model", "model", "Name", "name", "Id", "id"):
-                val = info.get(key)
-                if isinstance(val, str) and val:
-                    return val
-            return str(info)
-        except Exception:
-            return "unknown"
+        self.picam.start()
+        time.sleep(float(cfg.settle_s))
 
-    def _apply_auto_defaults(self, cfg: CameraConfig, model: str) -> CameraConfig:
-        if not cfg.auto_defaults:
-            # If user disables auto, still ensure fps not None
-            return cfg if cfg.fps is not None else CameraConfig(**{**cfg.__dict__, "fps": 30})
+        # Thread state
+        self._lock = threading.Lock()
+        self._frame = None
+        self._frame_t = 0.0
 
-        m = model.lower()
+        self._running = True
+        self._fps = 0.0
+        self._fps_count = 0
+        self._fps_t0 = time.perf_counter()
 
-        # Decide FPS if unspecified
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+        self.cfg = cfg
+        self.model = model
+        self.rotation = rotation
+
+    def _get_global_info(self) -> Dict[str, Any]:
+        infos = list_cameras()
+        if 0 <= self.index < len(infos):
+            return infos[self.index]
+        return {}
+
+    def _apply_model_defaults(self, cfg: CameraConfig, model: str) -> CameraConfig:
+        # Respect user overrides first
+        sensor_size = cfg.sensor_size
         fps = cfg.fps
-        sensor_output_size = cfg.sensor_output_size
-        include_raw = cfg.include_raw
-        ae_enable = cfg.ae_enable
-        exposure_us = cfg.exposure_us
 
-        if fps is None:
-            if "imx708" in m:
-                fps = 56
-            elif "imx500" in m:
-                fps = 30
-            else:
-                fps = 30
+        if "imx708" in model:
+            # Wide view, fastest available: 2304x1296 ~56fps (your list shows (0,0)/4608x2592 crop)
+            if sensor_size is None:
+                sensor_size = (2304, 1296)
+            if fps is None:
+                fps = 56.0
 
-        # If we are aiming for 120 on IMX708, force the 120 fps sensor mode unless user set one
-        if "imx708" in m and fps >= 100 and sensor_output_size is None:
-            sensor_output_size = (2304, 1296)
+        elif "imx500" in model:
+            # AI camera limit: 2028x1520 30fps
+            if sensor_size is None:
+                sensor_size = (2028, 1520)
+            if fps is None:
+                fps = 30.0
 
-        # On IMX500, don’t bother trying RAW by default (latency, no benefit for your pipeline)
-        if "imx500" in m:
-            include_raw = False
-
-        # Keep 120 fps stable: if user didn’t specify exposure, force a short one
-        # (Otherwise AE can lengthen exposure and effectively reduce fps)
-        if "imx708" in m and fps >= 100 and exposure_us is None:
-            exposure_us = None
-            ae_enable = True
+        else:
+            if fps is None:
+                fps = 30.0
 
         return CameraConfig(
             **{
                 **cfg.__dict__,
+                "sensor_size": sensor_size,
                 "fps": fps,
-                "sensor_output_size": sensor_output_size,
-                "include_raw": include_raw,
-                "ae_enable": ae_enable,
-                "exposure_us": exposure_us,
             }
         )
 
+    def _resolve_flips(self, cfg: CameraConfig, rotation: int) -> Tuple[bool, bool]:
+        # If user explicitly set flips, use them
+        if cfg.hflip is not None or cfg.vflip is not None:
+            return bool(cfg.hflip), bool(cfg.vflip)
+
+        if not cfg.auto_orientation:
+            return False, False
+
+        # Use Rotation metadata as a sensible default
+        # 180 means upside down, so flip both
+        if rotation == 180:
+            return True, True
+        if rotation == 90:
+            # Rotation isn't a flip; we leave it alone here
+            return False, False
+        if rotation == 270:
+            return False, False
+        return False, False
+
+    def _loop(self):
+        while self._running:
+            try:
+                img = self.picam.capture_array("main")
+            except Exception:
+                time.sleep(0.005)
+                continue
+
+            now = time.perf_counter()
+            with self._lock:
+                self._frame = img
+                self._frame_t = now
+
+            self._fps_count += 1
+            dt = now - self._fps_t0
+            if dt >= 1.0:
+                self._fps = self._fps_count / dt
+                self._fps_count = 0
+                self._fps_t0 = now
+
     def read(self):
-        return self.picam.capture_array()
+        # Latest frame; returns None until first frame arrives
+        with self._lock:
+            if self._frame is None:
+                return None
+            # Copy so callers never race the writer thread
+            return self._frame.copy()
+
+    @property
+    def fps(self) -> float:
+        return float(self._fps)
+
+    def age_s(self) -> float:
+        with self._lock:
+            t = self._frame_t
+        if t == 0.0:
+            return 1e9
+        return time.perf_counter() - t
 
     def close(self):
+        self._running = False
+        try:
+            self._thread.join(timeout=0.5)
+        except Exception:
+            pass
         try:
             self.picam.stop()
         except Exception:
@@ -224,57 +274,3 @@ class Camera:
             self.picam.close()
         except Exception:
             pass
-
-import threading
-from typing import Optional, Tuple
-
-class AsyncCamera:
-    """
-    Background grabbing wrapper.
-    - Starts its own thread
-    - Always stores the latest frame
-    - read() is non blocking (returns latest or None until first frame arrives)
-    """
-    def __init__(self, index: int, cfg: CameraConfig = CameraConfig(), copy_frames: bool = False):
-        self._cam = Camera(index, cfg)
-        self._copy = bool(copy_frames)
-
-        self._lock = threading.Lock()
-        self._frame = None
-        self._running = True
-
-        self._frames = 0
-        self._fps = 0.0
-        self._t0 = time.perf_counter()
-
-        self._th = threading.Thread(target=self._loop, daemon=True)
-        self._th.start()
-
-    def _loop(self):
-        while self._running:
-            img = self._cam.read()
-            if self._copy:
-                img = img.copy()
-
-            now = time.perf_counter()
-            with self._lock:
-                self._frame = img
-
-            self._frames += 1
-            dt = now - self._t0
-            if dt >= 1.0:
-                self._fps = self._frames / dt
-                self._frames = 0
-                self._t0 = now
-
-    def read(self):
-        with self._lock:
-            return self._frame
-
-    def fps(self) -> float:
-        return float(self._fps)
-
-    def close(self):
-        self._running = False
-        self._th.join(timeout=1.0)
-        self._cam.close()

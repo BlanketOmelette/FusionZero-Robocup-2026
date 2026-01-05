@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
-from fusionzero.drivers.camera import AsyncCamera, list_cameras, has_display
+
+from fusionzero.drivers.camera import Camera, has_display, list_cameras
 
 SHOW_WINDOWS = True
 
@@ -12,26 +13,36 @@ def main():
     gui = bool(SHOW_WINDOWS and has_display())
     if gui:
         import cv2
-        cv2.namedWindow("Wide", cv2.WINDOW_NORMAL)
-        cv2.namedWindow("AI", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("wide", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("ai", cv2.WINDOW_NORMAL)
+    else:
+        print("Headless mode, printing FPS")
 
-    wide = AsyncCamera(0)  # uses defaults from camera.py
-    ai = AsyncCamera(1)
+    wide = Camera(0)
+    ai = Camera(1)
 
+    last = time.perf_counter()
     try:
         while True:
-            fw = wide.read()
-            fa = ai.read()
+            f0 = wide.read()
+            f1 = ai.read()
 
-            if gui and fw is not None and fa is not None:
+            now = time.perf_counter()
+            if now - last >= 1.0:
+                print(f"FPS wide={wide.fps:5.1f} ai={ai.fps:5.1f} age_w={wide.age_s():.3f}s age_a={ai.age_s():.3f}s")
+                last = now
+
+            if gui:
                 import cv2
-                cv2.imshow("Wide", cv2.cvtColor(fw, cv2.COLOR_RGB2BGR))
-                cv2.imshow("AI", cv2.cvtColor(fa, cv2.COLOR_RGB2BGR))
+                if f0 is not None:
+                    cv2.imshow("wide", f0)
+                if f1 is not None:
+                    cv2.imshow("ai", f1)
                 if (cv2.waitKey(1) & 0xFF) == ord("q"):
                     break
             else:
-                print(f"FPS wide={wide.fps():5.1f} ai={ai.fps():5.1f}")
-                time.sleep(1.0)
+                time.sleep(0.01)
+
     finally:
         wide.close()
         ai.close()
