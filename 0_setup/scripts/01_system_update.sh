@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
+echo "[01] System update + base packages"
+
 sudo apt-get update
 sudo apt-get -y full-upgrade
 
-# Core tooling + build deps for gpio libs (Pi 5)
+# Core tooling + build deps needed for Pi 5 GPIO libs (lgpio via pip needs these)
 sudo apt-get install -y \
   git curl wget unzip zip \
   python3 python3-pip python3-venv python3-dev \
@@ -13,4 +15,4 @@ sudo apt-get install -y \
   swig \
   liblgpio-dev
 
-echo "Done. Reboot recommended."
+echo "[01] Done. If kernel/firmware changed, reboot is recommended."
