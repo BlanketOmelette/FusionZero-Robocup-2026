@@ -21,6 +21,7 @@ from queue import Queue, Empty
 import threading
 from threading import Thread
 import multiprocessing as mp
+from collections import deque
 
 # =========================
 # Core third party
