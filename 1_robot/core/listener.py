@@ -71,16 +71,22 @@ class ModeListener:
         # gpiozero handles pull-ups and Pi 5 GPIO backend properly
         self._button = Button(self.button_pin, pull_up=True, bounce_time=0.02)
 
-        # start state
-        self.set_mode(1 if self._button.is_pressed else 0)
+        prev_pressed = self._button.is_pressed
 
         while not self.exit_event.is_set():
-            self.set_mode(1 if self._button.is_pressed else 0)
-            time.sleep(0.05)
+            pressed = self._button.is_pressed
+
+            if pressed != prev_pressed:
+                # only change mode when the switch actually changes
+                self.set_mode(1 if pressed else 0)
+                prev_pressed = pressed
+
+            time.sleep(0.02)
 
         try:
             self._button.close()
         except Exception:
             pass
+
             
 listener = ModeListener()
