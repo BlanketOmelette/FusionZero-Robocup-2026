@@ -12,11 +12,11 @@ class LineFollower:
         self.robot_state = robot_state
 
         # Follower
-        self.straight_speed = 90          # max speed when error is near 0
-        self.corner_speed = 60            # speed when error is large
-        self.speed_ramp_error = 10        # abs(error) >= this means full corner_speed
+        self.straight_speed = 80          # max speed when error is near 0
+        self.corner_speed = 50            # speed when error is large
+        self.speed_ramp_error = 8        # abs(error) >= this means full corner_speed
         self.speed_approach = 60
-        self.proportional_gain = 5
+        self.proportional_gain = 7
 
         # Smoothing
         self.error_window_size = 5
@@ -27,7 +27,7 @@ class LineFollower:
         self.base_black = 110
         self.bright_black = 180
 
-        self.green_min_area = 8000
+        self.green_min_area = 10000
         self.green_hsv_lower = np.array([40, 50, 60])
         self.green_hsv_upper = np.array([90, 255, 255])
 
@@ -39,7 +39,7 @@ class LineFollower:
 
         # Double green routine
         self.dg_left_spin = 75
-        self.dg_right_spin = 80
+        self.dg_right_spin = -80
         self.dg_spin_time = 1.5
         self.dg_reacquire_threshold = 1
         self.dg_reacquire_timeout = 5
@@ -63,11 +63,18 @@ class LineFollower:
         self.green_mask = None
         self.green_contours = []
 
+        self.no_gap_s = 1
+        self.run_started_at = None
+
     # ======================================================================
     # MAIN LOOP
     # ======================================================================
 
     def follow(self, starting: bool = False) -> None:
+        if listener.get_mode() == 0:
+            self.run_started_at = None
+            return False
+
         self.image = line_camera.capture_array()
         self.display_image = self.image.copy() if self.image is not None else None
         self.green_mask = None
@@ -85,11 +92,18 @@ class LineFollower:
                 self.robot_state.debug_text.clear()
         else:
             if not starting:
+                # no-gap window after enabling line follow
+                if self._in_no_gap_window():
+                    motors.run(0, 0)
+                    self.robot_state.debug_text.clear()
+                    return False
+
                 oled.text("GAP", 38, 12, size=30, clear=True)
                 self.gap_handling()
             else:
+                # still record a start time during starting mode
+                self._in_no_gap_window()
                 self.robot_state.debug_text.clear()
-
 
         if self.display_image is not None and line_camera.X11:
             show(
@@ -203,6 +217,11 @@ class LineFollower:
     # HELPERS
     # ======================================================================
 
+    def _in_no_gap_window(self) -> bool:
+        if self.run_started_at is None:
+            self.run_started_at = time.perf_counter()
+        return (time.perf_counter() - self.run_started_at) < self.no_gap_s
+    
     def run_till_camera(
         self,
         left_percent: float,
