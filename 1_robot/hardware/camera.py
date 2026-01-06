@@ -1,4 +1,4 @@
-from core.shared_imports import cv2, np, time, Thread, Picamera2, Transform
+from core.shared_imports import cv2, np, time, threading, Thread, Picamera2, Transform
 from core.utilities import debug
 
 _PRESETS = {
@@ -67,6 +67,10 @@ class Camera:
         self._latest = None
         self._running = False
         self._thread = None
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._frame_id = 0
+
 
         # FPS tracking
         self.fps = 0.0
@@ -127,9 +131,15 @@ class Camera:
 
             frame = self._apply_roi(frame)
             frame = self._draw_debug(frame)
-            self._latest = frame
 
             now = time.perf_counter()
+
+            with self._cond:
+                self._latest = frame
+                self._frame_id += 1
+                self._cond.notify()
+
+            # FPS tracking
             dt = now - self._t_last
             self._t_last = now
             if dt > 1e-6:
@@ -139,18 +149,33 @@ class Camera:
                 else:
                     self.fps = (1.0 - self._fps_alpha) * self.fps + self._fps_alpha * inst
 
+
     def capture_array(self):
-        return self._latest
+        """
+        Blocking call.
+        Returns the next available frame exactly once.
+        """
+        with self._cond:
+            last_id = self._frame_id
+            while self._running and self._frame_id == last_id:
+                self._cond.wait()
+
+            return self._latest
+
 
     def start(self):
         if self._running:
             return
-        # start camera pipeline
         self.camera.start()
         self._running = True
         self._t_last = time.perf_counter()
         self._thread = Thread(target=self._worker, daemon=True)
         self._thread.start()
+
+        t0 = time.perf_counter()
+        while self._latest is None and (time.perf_counter() - t0) < 1.0:
+            time.sleep(0.001)
+
 
     def stop(self):
         if not self._running:

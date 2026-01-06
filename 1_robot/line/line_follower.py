@@ -7,10 +7,10 @@ class LineFollower:
         self.robot_state = robot_state
 
         # Follower
-        self.speed = 25
-        self.turn_multi = 2.2
-        self.rate_multi = 0.0
-        self.integral_multi = 0.0 #0.002
+        self.speed = 40
+        self.turn_multi = 1
+        self.rate_multi = 0
+        self.integral_multi = 0 #0.002
         self.min_black_area = 1500
 
         # Black thresholding
@@ -23,8 +23,7 @@ class LineFollower:
         self.image = self.gray_image = self.black_mask = self.black_contour = self.display_image = None
 
     def follow(self, starting=False) -> None:
-        frame = line_camera.capture_array()
-        self.image = frame
+        self.image = line_camera.capture_array()
         self.display_image = self.image.copy()
 
         self.find_black()
@@ -46,7 +45,7 @@ class LineFollower:
             show(self.display_image, display=line_camera.X11, name="line", debug_lines=self.robot_state.debug_text)
 
     def __turn(self):
-        error = self.angle - 90
+        error = int(self.angle - 90)
 
         now = time.perf_counter()
         time_change = now - self.prev_time
@@ -59,6 +58,7 @@ class LineFollower:
             self.turn += self.rate_multi * (error - self.prev_error) / time_change
             self.integral += error * time_change
             self.turn += self.integral * self.integral_multi
+            self.turn = int(self.turn)
 
         self.prev_error = error
         self.prev_time = now

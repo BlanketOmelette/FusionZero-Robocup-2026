@@ -6,7 +6,6 @@ class RobotState():
 
         # Variables
         self.debug_text = []
-        self.oled_put_text = None
         
         # self.count = {
         #     "uphill": 0,

@@ -1,4 +1,4 @@
-from core.shared_imports import time, threading, Queue, Empty, GPIO
+from core.shared_imports import time, threading, Queue, Empty, Button
 
 
 class ModeListener:
@@ -12,6 +12,7 @@ class ModeListener:
         self.input_queue: Queue[str] = Queue()
 
         self._threads = []
+        self._button: Button | None = None
 
     def start(self) -> None:
         self.exit_event.clear()
@@ -67,26 +68,19 @@ class ModeListener:
                 self.exit_event.set()
 
     def _button_thread(self) -> None:
+        # gpiozero handles pull-ups and Pi 5 GPIO backend properly
+        self._button = Button(self.button_pin, pull_up=True, bounce_time=0.02)
+
+        # start state
+        self.set_mode(1 if self._button.is_pressed else 0)
+
+        while not self.exit_event.is_set():
+            self.set_mode(1 if self._button.is_pressed else 0)
+            time.sleep(0.05)
+
         try:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setup(self.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-            prev_pressed = (GPIO.input(self.button_pin) == GPIO.LOW)
-
-            while not self.exit_event.is_set():
-                pressed = (GPIO.input(self.button_pin) == GPIO.LOW)
-
-                if pressed != prev_pressed:
-                    # same as your old behavior: 1 while pressed, 0 when released
-                    self.set_mode(1 if pressed else 0)
-                    prev_pressed = pressed
-
-                time.sleep(0.05)
-
-        finally:
-            try:
-                GPIO.cleanup(self.button_pin)
-            except Exception:
-                pass
-
+            self._button.close()
+        except Exception:
+            pass
+            
 listener = ModeListener()

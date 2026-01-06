@@ -19,7 +19,7 @@ from collections import deque
 from typing import Optional, Deque
 from queue import Queue, Empty
 import threading
-import threading
+from threading import Thread
 import multiprocessing as mp
 
 # =========================
@@ -32,7 +32,7 @@ import numpy as np
 # Raspberry Pi / Camera
 # =========================
 from RPi import GPIO
-from gpiozero import DigitalOutputDevice
+from gpiozero import DigitalOutputDevice, DigitalInputDevice, Button
 from rpi_hardware_pwm import HardwarePWM
 from picamera2 import Picamera2
 from libcamera import Transform
