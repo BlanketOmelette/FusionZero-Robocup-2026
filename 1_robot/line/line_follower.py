@@ -38,7 +38,8 @@ class LineFollower:
         self.error_sum = 0
 
         # Double green routine
-        self.dg_spin = 75
+        self.dg_left_spin = 75
+        self.dg_right_spin = 80
         self.dg_spin_time = 1.5
         self.dg_reacquire_threshold = 1
         self.dg_reacquire_timeout = 5
@@ -106,11 +107,11 @@ class LineFollower:
             self.robot_state.debug_text.append("DOUBLE GREEN")
             oled.text("DG", 35, 12, size=30, clear=True)
 
-            self._run_percent(self.dg_spin, -self.dg_spin, self.dg_spin_time)
+            self._run_percent(self.dg_left_spin, self.dg_right_spin, self.dg_spin_time)
 
             self.run_till_camera(
-                self.dg_spin - 10,
-                -self.dg_spin + 10,
+                self.dg_left_spin - 10,
+                self.dg_right_spin + 10,
                 threshold=self.dg_reacquire_threshold,
                 text=["DOUBLE GREEN"],
                 timeout=self.dg_reacquire_timeout,
@@ -384,7 +385,7 @@ class LineFollower:
 
             x, y = int(extreme_point[0][0]), int(extreme_point[0][1])
             center_x = line_camera.WIDTH // 2
-            shift_pixels = 60
+            shift_pixels = 30
 
             if self.green_signal == "LEFT":
                 x = min(x + shift_pixels, center_x)
@@ -393,7 +394,7 @@ class LineFollower:
 
             x = max(0, min(line_camera.WIDTH - 1, x))
 
-            ref_point = (x, y)
+            ref_point = (x, 0)
             return self._finalize_angle(ref_point, validate)
 
 
