@@ -70,6 +70,8 @@ class LineFollower:
     def follow(self, starting: bool = False) -> None:
         self.image = line_camera.capture_array()
         self.display_image = self.image.copy() if self.image is not None else None
+        self.green_mask = None
+        self.green_contours = []
 
         self.find_black()
 
@@ -96,6 +98,10 @@ class LineFollower:
                 name="line",
                 debug_lines=self.robot_state.debug_text,
             )
+
+        if starting and self.black_contour is not None:
+            return True
+        return False
 
     # ======================================================================
     # TURN

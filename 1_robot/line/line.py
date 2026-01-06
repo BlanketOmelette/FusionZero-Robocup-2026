@@ -11,11 +11,15 @@ def main(start_time, robot_state, line_follow) -> None:
 
     led.on()
 
-    if time.perf_counter() - start_time < 5:
-        while (time.perf_counter() - start_time < 5) and listener.get_mode() != 0:
+    if time.perf_counter() - start_time < 3:
+        while (time.perf_counter() - start_time < 3) and listener.get_mode() != 0:
             time.sleep(0.001)
             motors.run(0, 0)
-            line_follow.follow(starting=True)
+            found_black = line_follow.follow(starting=True)
+
+            if found_black:
+                start_time = time.perf_counter() - 3
+                break
 
     else: line_follow.follow()
 
