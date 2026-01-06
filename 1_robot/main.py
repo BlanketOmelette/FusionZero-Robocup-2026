@@ -16,6 +16,13 @@ record = True
 robot_state = RobotState()
 line_follow = LineFollower(robot_state)
 
+configure_finalize_gesture(get_mode=listener.get_mode, 
+read_touches=touch.read, 
+led_blink=led.blink, 
+required_mode=0, 
+hold_seconds=3.0, 
+action="interrupt",
+)
 
 def main() -> None:
     motors.run(0, 0)
@@ -33,6 +40,7 @@ def main() -> None:
         oled.display_logo()
 
         while not listener.exit_event.is_set():
+            gesture_tick()
             mode = listener.get_mode()
 
             if mode != last_mode:

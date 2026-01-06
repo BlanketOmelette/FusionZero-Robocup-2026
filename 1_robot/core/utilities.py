@@ -1,4 +1,4 @@
-from core.shared_imports import threading, Queue, Empty, cv2, np, time, os
+from core.shared_imports import threading, Queue, Empty, cv2, np, time, os, csv, shutil, subprocess, Path
 
 # =========================
 # Session / Paths (SD card)
@@ -119,7 +119,6 @@ def health_tick(debug_list: list[str], every_seconds: float = 0.5) -> None:
     debug_list.append(f"RAM: {_health_state['ram'][0]:0.1f}/{_health_state['ram'][1]:0.1f}GB")
     debug_list.append(f"TEMP: {_health_state['temp']}°C")
 
-
 # =========================
 # Printing / Display
 # =========================
@@ -127,7 +126,6 @@ def health_tick(debug_list: list[str], every_seconds: float = 0.5) -> None:
 # Fixed widths for debug lines: [TRIGGERS, GREEN, TURN, INT, FPS, CPU, MEM, TEMP]
 DEBUG_FIXED_WIDTHS = [12, 23, 13, 15, 13, 14, 20, 14]
 
-# Print Functions
 def debug(data: list[str], coloumn_widths: list[int], separator: str = "|") -> None:
     formatted_cells = [f"{cell:^{width}}" for cell, width in zip(data, coloumn_widths)]
     print(f" {separator} ".join(formatted_cells))
@@ -153,12 +151,10 @@ def debug_lines(entries: list[str], padding: int = 2, separator: str = "|") -> N
     formatted = [f"{str(cell):^{width}}" for cell, width in zip(entries, col_widths)]
     print(f" {separator} ".join(formatted))
 
-
 # =========================
 # Display & Saving (to SD)
 # =========================
 
-# You can override these from main if you want
 DISPLAY_ENABLED = True
 SAVE_ENABLED = True
 
@@ -168,18 +164,162 @@ _save_thread = None
 _save_queue: Queue = None
 _stop_evt = threading.Event()
 
-SAVE_EVERY_N = 5          # keep your old default
-DISPLAY_QUEUE_MAX = 1     # keep only latest frame
-SAVE_QUEUE_MAX = 2        # small buffer, drops if slow
+SAVE_EVERY_N = 5
+DISPLAY_QUEUE_MAX = 1
+SAVE_QUEUE_MAX = 2
 _save_i = 0
 
-# Keep a small in-RAM index of what we saved: list of (filepath, timestamp)
-_saved_frames = []
+_saved_frames = []  # list of (filepath, timestamp)
+
+# Video finalize defaults (drop in behavior)
+FINALIZE_VIDEO_ON_STOP = True
+FINALIZE_CLEANUP_ON_SUCCESS = True
+FINALIZE_OUT_NAME = "run_vfr.mp4"
+
+# Gesture finalize (optional, configured from main)
+_gesture_cfg = {
+    "enabled": False,
+    "get_mode": None,         # callable -> int
+    "read_touches": None,     # callable -> list/tuple of length touch_count
+    "led_blink": None,        # callable(seconds: float) -> None
+    "required_mode": 0,
+    "touch_count": 4,
+    "hold_seconds": 3.0,
+    "check_every": 0.03,      # seconds
+    "pressed_value": 0,       # for int sensors (common: 0 = pressed)
+    "action": "interrupt",    # "interrupt" or "flag"
+}
+
+_gesture_state = {
+    "t0": None,
+    "armed": True,
+    "last_check": 0.0,
+}
+
+_finalize_requested = False
+
+
+def configure_finalize_gesture(
+    *,
+    get_mode,
+    read_touches,
+    led_blink=None,
+    required_mode: int = 0,
+    touch_count: int = 4,
+    hold_seconds: float = 3.0,
+    pressed_value: int = 1,
+    action: str = "interrupt",
+) -> None:
+    """
+    Call this once in your main after you create listener/touch/led.
+
+    get_mode:     function returning current mode (int)
+    read_touches: function returning iterable of touch states
+    led_blink:    optional function(seconds) for feedback
+    action:
+      - "interrupt": raises KeyboardInterrupt from show() when held long enough
+      - "flag": sets finalize_requested flag, your main loop can break manually
+    """
+    _gesture_cfg["enabled"] = True
+    _gesture_cfg["get_mode"] = get_mode
+    _gesture_cfg["read_touches"] = read_touches
+    _gesture_cfg["led_blink"] = led_blink
+    _gesture_cfg["required_mode"] = required_mode
+    _gesture_cfg["touch_count"] = touch_count
+    _gesture_cfg["hold_seconds"] = hold_seconds
+    _gesture_cfg["pressed_value"] = pressed_value
+    _gesture_cfg["action"] = action
+
+
+def finalize_requested() -> bool:
+    return bool(_finalize_requested)
+
+
+def _touch_pressed(v) -> bool:
+    # bool sensors
+    if isinstance(v, bool):
+        return v
+    # int sensors
+    if isinstance(v, int):
+        return v == _gesture_cfg["pressed_value"]
+    # fallback
+    return bool(v)
+
+def gesture_tick():
+    _check_finalize_gesture()
+
+def _check_finalize_gesture() -> None:
+    """
+    Called from show() at a low rate.
+    If triggered:
+      - blink LED (if provided)
+      - set flag
+      - optionally raise KeyboardInterrupt to emulate Ctrl+C
+    """
+    global _finalize_requested
+
+    if not _gesture_cfg["enabled"]:
+        return
+
+    now = time.perf_counter()
+    if (now - _gesture_state["last_check"]) < _gesture_cfg["check_every"]:
+        return
+    _gesture_state["last_check"] = now
+
+    get_mode = _gesture_cfg["get_mode"]
+    read_touches = _gesture_cfg["read_touches"]
+    if get_mode is None or read_touches is None:
+        return
+
+    try:
+        mode = int(get_mode())
+    except Exception:
+        return
+
+    if mode != _gesture_cfg["required_mode"]:
+        _gesture_state["t0"] = None
+        _gesture_state["armed"] = True
+        return
+
+    try:
+        touches = list(read_touches())
+    except Exception:
+        return
+
+    if len(touches) < _gesture_cfg["touch_count"]:
+        return
+
+    all_pressed = True
+    for i in range(_gesture_cfg["touch_count"]):
+        if not _touch_pressed(touches[i]):
+            all_pressed = False
+            break
+
+    if all_pressed:
+        if _gesture_state["t0"] is None:
+            _gesture_state["t0"] = now
+
+        if _gesture_state["armed"] and (now - _gesture_state["t0"]) >= _gesture_cfg["hold_seconds"]:
+            _gesture_state["armed"] = False
+            _finalize_requested = True
+
+            # LED feedback: quick triple blink
+            blink = _gesture_cfg["led_blink"]
+            if callable(blink):
+                try:
+                    for _ in range(3):
+                        blink(0.08)
+                except Exception:
+                    pass
+
+            if _gesture_cfg["action"] == "interrupt":
+                raise KeyboardInterrupt
+    else:
+        _gesture_state["t0"] = None
+        _gesture_state["armed"] = True
 
 
 def _display_worker(q: Queue):
-    # Note: OpenCV imshow usually works fine in a thread on Pi
-    # If you ever get weird UI issues, switch back to process, but try this first.
     while not _stop_evt.is_set():
         try:
             item = q.get(timeout=0.1)
@@ -222,7 +362,6 @@ def _save_worker(q: Queue):
             if _meta_file is not None:
                 _meta_file.write(f"{ts:.6f},{fname}\n")
         except Exception:
-            # Never let saving crash the robot
             pass
 
 
@@ -267,13 +406,14 @@ def show(frame: np.ndarray, name: str = "Display", display: bool = True, debug_l
     if debug_lines is not None:
         put_text_on_image(frame, debug_lines)
 
-    # avoid copies when already uint8
     if frame.dtype != np.uint8:
         frame = frame.astype(np.uint8, copy=False)
 
-    # --- async display (keeps only latest) ---
+    # gesture check (can raise KeyboardInterrupt)
+    _check_finalize_gesture()
+
+    # async display (keeps only latest)
     if DISPLAY_ENABLED and display and _display_queue is not None:
-        # drop stale frames
         while True:
             try:
                 _display_queue.get_nowait()
@@ -284,19 +424,145 @@ def show(frame: np.ndarray, name: str = "Display", display: bool = True, debug_l
         except Exception:
             pass
 
-    # --- async saving (keeps your SAVE_EVERY_N behavior) ---
+    # async saving
     if SAVE_ENABLED and _save_queue is not None:
         _save_i = (_save_i + 1) % SAVE_EVERY_N
         if _save_i == 0:
             ts = time.perf_counter()
-            # push to saver thread, drop if queue full
             try:
                 _save_queue.put_nowait((frame.copy(), ts))
             except Exception:
                 pass
 
 
-def stop_display():
+def _make_vfr_video_from_session(session_dir: str, out_name: str) -> str | None:
+    sdir = Path(session_dir)
+    meta = sdir / "timestamps.csv"
+    if not meta.exists():
+        return None
+
+    if shutil.which("ffmpeg") is None:
+        print("[video] ffmpeg not found, skipping mp4")
+        return None
+
+    rows: list[tuple[float, str]] = []
+    with meta.open("r", newline="") as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            try:
+                ts = float(r["timestamp"])
+                fname = str(r["filename"])
+            except Exception:
+                continue
+            if (sdir / fname).exists():
+                rows.append((ts, fname))
+
+    if len(rows) < 2:
+        print("[video] not enough frames to build video")
+        return None
+
+    rows.sort(key=lambda x: x[0])
+
+    tmp_dir = sdir / "__tmp_png"
+    tmp_dir.mkdir(exist_ok=True)
+    concat_path = sdir / "__vfr_concat.txt"
+
+    # Write PNGs
+    png_rel_paths: list[str] = []
+    for i, (ts, fname) in enumerate(rows):
+        npy_path = sdir / fname
+        frame = np.load(str(npy_path), allow_pickle=False)
+        if frame.dtype != np.uint8:
+            frame = frame.astype(np.uint8, copy=False)
+        if frame.ndim == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+        png_path = tmp_dir / f"frame_{i:06d}.png"
+        cv2.imwrite(str(png_path), frame)
+
+        # IMPORTANT: store path relative to session dir
+        png_rel_paths.append((png_path.relative_to(sdir)).as_posix())
+
+    # Write concat file using relative paths
+    with concat_path.open("w") as cf:
+        for i, rel in enumerate(png_rel_paths):
+            cf.write(f"file '{rel}'\n")
+            if i < len(rows) - 1:
+                dt = max(0.0001, rows[i + 1][0] - rows[i][0])
+                cf.write(f"duration {dt:.6f}\n")
+        # repeat last frame so ffmpeg keeps it
+        cf.write(f"file '{png_rel_paths[-1]}'\n")
+
+    out_path = sdir / out_name
+    if out_path.exists():
+        stem, ext = out_path.stem, out_path.suffix
+        k = 0
+        while True:
+            candidate = sdir / f"{stem}_{k}{ext}"
+            if not candidate.exists():
+                out_path = candidate
+                break
+            k += 1
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-loglevel", "error",
+        "-f", "concat", "-safe", "0",
+        "-i", concat_path.name,      # run from inside session dir
+        "-vsync", "vfr",
+        "-pix_fmt", "yuv420p",
+        "-c:v", "libx264",
+        "-crf", "18",
+        out_path.name,
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, cwd=str(sdir))
+    except Exception as e:
+        print(f"[video] ffmpeg failed: {e}")
+        return None
+    finally:
+        try:
+            concat_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    return str(out_path)
+
+
+def _cleanup_session_frames_and_meta(session_dir: str) -> None:
+    sdir = Path(session_dir)
+    meta = sdir / "timestamps.csv"
+    if meta.exists():
+        try:
+            with meta.open("r", newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    fname = r.get("filename")
+                    if not fname:
+                        continue
+                    try:
+                        (sdir / fname).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    try:
+        meta.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def stop_display(
+    finalize_video: bool = FINALIZE_VIDEO_ON_STOP,
+    out_name: str = FINALIZE_OUT_NAME,
+    cleanup_on_success: bool = FINALIZE_CLEANUP_ON_SUCCESS,
+):
     global _display_thread, _display_queue, _save_thread, _save_queue
 
     _stop_evt.set()
@@ -324,6 +590,20 @@ def stop_display():
     _save_queue = None
 
     _close_session()
+
+    # Finalize to MP4 after threads stop and timestamps flushed
+    if finalize_video and SESSION_DIR is not None:
+        out = _make_vfr_video_from_session(SESSION_DIR, out_name=out_name)
+        if out and cleanup_on_success:
+            _cleanup_session_frames_and_meta(SESSION_DIR)
+
+            # LED feedback: one longer blink if configured
+            blink = _gesture_cfg.get("led_blink")
+            if callable(blink):
+                try:
+                    blink(0.25)
+                except Exception:
+                    pass
 
 
 def get_saved_frames():

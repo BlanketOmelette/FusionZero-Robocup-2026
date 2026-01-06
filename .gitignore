@@ -10,4 +10,4 @@ __pycache__/
 
 # Logs
 *.log
-./sessions/
+/sessions/
