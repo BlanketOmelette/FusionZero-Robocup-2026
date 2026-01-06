@@ -47,7 +47,7 @@ class Camera:
         self.TARGET_FPS = cfg["target_fps"]
 
         self.color_format = "RGB888"
-        self._init_debug_polygons()
+        self._init_bright_polygons()
 
         self.camera = Picamera2(camera_num=cfg["index"])
 
@@ -79,16 +79,25 @@ class Camera:
 
         debug(["INITIALISATION", f"CAMERA({camera_type})", "✓"], [25, 25, 50])
 
-    def _init_debug_polygons(self):
-        w = int(self.WIDTH)
-        h = int(self.HEIGHT)
+    def _init_bright_polygons(self):
+        w, h = int(self.WIDTH), int(self.HEIGHT)
 
-        self.light_point_left = np.array([[120, 70], [40, 70], [45, 100], [125, 100]], dtype=np.float32)
-        self.light_point_right = np.array([[290, 45], [195, 45], [195, 85], [280, 85]], dtype=np.float32)
-        self.light_point_mid_top = np.array([[w - 40, 100], [50, 110], [65, 130], [w - 45, 120]], dtype=np.float32)
-        self.light_point_mid = np.array([[w - 30, 125], [70, 140], [80, 160], [w - 40, 145]], dtype=np.float32)
-        self.dark_left = np.array([[0, h - 70], [0, h], [70, h]], dtype=np.float32)
-        self.dark_right = np.array([[w, h - 70], [w, h], [w - 70, h]], dtype=np.float32)
+        # top left, top_right, bottom_right, bottom_left
+        self.bright_top = np.array([[120, 20], [205, 20], [205, 50], [120, 50]], dtype=np.float32)
+        self.bright_left = np.array([[50, 90], [130, 90], [130, 120], [50, 120]], dtype=np.float32)
+        self.bright_right = np.array([[200, 100], [280, 100], [280, 125], [200, 125]], dtype=np.float32)
+        self.bright_bottom = np.array([[45, 140], [275, 140], [275, 170], [45, 170]], dtype=np.float32)
+
+    def _draw_debug(self, frame):
+        if not (self.X11 and self.debug):
+            return frame
+
+        cv2.polylines(frame, [np.int32(self.bright_top)], True, (0, 0, 255), 2)
+        cv2.polylines(frame, [np.int32(self.bright_left)], True, (0, 0, 255), 2)
+        cv2.polylines(frame, [np.int32(self.bright_right)], True, (0, 0, 255), 2)
+        cv2.polylines(frame, [np.int32(self.bright_bottom)], True, (0, 0, 255), 2)
+
+        return frame
 
     def _apply_roi(self, frame):
         if frame is None or self.roi is None:
@@ -105,21 +114,6 @@ class Camera:
         if x1 <= x0 or y1 <= y0:
             return frame
         return frame[y0:y1, x0:x1]
-
-    def _draw_debug(self, frame_rgb):
-        if not (self.X11 and self.debug):
-            return frame_rgb
-
-        img = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-
-        cv2.polylines(img, [np.int32(self.light_point_left)], isClosed=True, color=(0, 255, 0), thickness=2)
-        cv2.polylines(img, [np.int32(self.light_point_right)], isClosed=True, color=(0, 255, 0), thickness=2)
-        cv2.polylines(img, [np.int32(self.light_point_mid_top)], isClosed=True, color=(0, 255, 0), thickness=2)
-        cv2.polylines(img, [np.int32(self.light_point_mid)], isClosed=True, color=(0, 255, 0), thickness=2)
-        cv2.polylines(img, [np.int32(self.dark_left)], isClosed=True, color=(0, 255, 0), thickness=2)
-        cv2.polylines(img, [np.int32(self.dark_right)], isClosed=True, color=(0, 255, 0), thickness=2)
-
-        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     def _worker(self):
         while self._running:
