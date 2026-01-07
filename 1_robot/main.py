@@ -11,17 +11,36 @@ from hardware.robot import *
 from line.robot_state import RobotState
 from line.line_follower import LineFollower
 
+import os
+
 record = True
 
 robot_state = RobotState()
 line_follow = LineFollower(robot_state)
 
-configure_finalize_gesture(get_mode=listener.get_mode, 
-read_touches=touch.read, 
-led_blink=led.blink, 
-required_mode=0, 
-hold_seconds=3.0, 
-action="interrupt",
+# Optional: load silver model once (won't crash if file/module missing)
+SILVER_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "silver_detector.ts")
+silver_detector = None
+
+try:
+    if os.path.exists(SILVER_MODEL_PATH):
+        from line.silver_detector import SilverLineDetector
+        silver_detector = SilverLineDetector(SILVER_MODEL_PATH, device="cpu")
+        print("Silver model loaded:", SILVER_MODEL_PATH)
+    else:
+        print("Silver model not found:", SILVER_MODEL_PATH)
+except Exception as e:
+    print("Silver model disabled:", e)
+    silver_detector = None
+
+configure_finalize_gesture(
+    get_mode=listener.get_mode,
+    read_touches=touch.read,
+    led_blink=led.blink,
+    required_mode=0,
+    hold_seconds=3.0,
+    pressed_value=0,      # important: touch pressed==0
+    action="interrupt",
 )
 
 def main() -> None:
@@ -74,7 +93,7 @@ def main() -> None:
                 pass
 
             elif mode == 1:
-                line.main(start_time, robot_state, line_follow)
+                line.main(start_time, robot_state, line_follow, silver_detector)
 
             elif mode == 2:
                 evac.main(robot_state, evac_camera)
