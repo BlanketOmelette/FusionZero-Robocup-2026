@@ -1,0 +1,22 @@
+{
+  "backbone": "shufflenet_v2_x1_0",
+  "img_size": 96,
+  "crop_mode": "none",
+  "aug_level": "none",
+  "mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "class_map": {
+    "no_silver": 0,
+    "silver": 1
+  },
+  "recommended_threshold": 0.5,
+  "recommended_streak": 1
+}
