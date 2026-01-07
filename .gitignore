@@ -3,11 +3,6 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Virtual envs
-venv/
-.venv/
-0_setup/venv/
-
 # OS + editors
 .DS_Store
 .vscode/
@@ -15,3 +10,4 @@ venv/
 
 # Logs
 *.log
+/sessions/
