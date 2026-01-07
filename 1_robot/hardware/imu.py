@@ -78,4 +78,4 @@ class IMU:
 
     def close(self) -> None:
         # BNO08X lib does not always expose a close; safe no-op
-        pass
+        debug(["TERMINATION", f"IMU", "✓"], [25, 25, 50])

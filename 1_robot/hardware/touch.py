@@ -22,3 +22,4 @@ class Touch:
         self._fr.close()
         self._bl.close()
         self._br.close()
+        debug(["TERMINATION", f"TOUCH", "✓"], [25, 25, 50])

@@ -198,3 +198,4 @@ class OLED:
             self.oled.show()
         except Exception:
             pass
+        debug(["TERMINATION", f"OLED", "✓"], [25, 25, 50])

@@ -1,4 +1,4 @@
-from core.shared_imports import time, random
+from core.shared_imports import time, random, os
 
 from core.listener import listener
 from core.utilities import *
@@ -39,7 +39,7 @@ configure_finalize_gesture(
     led_blink=led.blink,
     required_mode=0,
     hold_seconds=3.0,
-    pressed_value=0,      # important: touch pressed==0
+    pressed_value=1,
     action="interrupt",
 )
 
@@ -123,11 +123,9 @@ def main() -> None:
 
         motors.run(0, 0)
         oled.text("Motor ✓", 0, 15)
-        print("Motors Stopped")
 
         led.close()
         oled.text("LED ✓", 0, 30)
-        print("LED Off")
 
         if record:
             oled.text("SAVE ...", 0, 45)
@@ -140,20 +138,21 @@ def main() -> None:
 
         stop_display()
         oled.text("Disp ✓", 70, 0)
-        print("Display Stopped")
 
         line_camera.close()
         oled.text("LineCam ✓", 70, 15)
-        print("Line Camera Stopped")
 
         evac_camera.close()
         oled.text("EvacCam ✓", 70, 30)
-        print("Evac Camera Stopped")
 
         listener.stop()
-        print("Listener Stopped")
+
+        restore_terminal()
 
         time.sleep(0.1)
+
+def restore_terminal():
+    os.system("stty sane")
 
 if __name__ == "__main__":
     main()
