@@ -34,8 +34,10 @@ class LineFollower:
         self.error_sum = 0
 
         # Double green routine
-        self.dg_left_spin = 75
-        self.dg_right_spin = -80
+        self.dg_back = -70
+        self.dg_back_time = 0.2
+        self.dg_left_spin = 82
+        self.dg_right_spin = -75
         self.dg_spin_time = 1.5
         self.dg_reacquire_threshold = 1
         self.dg_reacquire_timeout = 5
@@ -123,8 +125,8 @@ class LineFollower:
             self.robot_state.debug_text.append("DOUBLE GREEN")
             oled.text("DG", 35, 12, size=30, clear=True)
 
+            self._run_percent(self.dg_back, self.dg_back, self.dg_back_time)
             self._run_percent(self.dg_left_spin, self.dg_right_spin, self.dg_spin_time)
-            self._run_percent(0, 0, 0.2)
 
             self.run_till_camera(
                 self.dg_left_spin - 10,
