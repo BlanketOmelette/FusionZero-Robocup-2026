@@ -1,4 +1,4 @@
-from core.shared_imports import time, cv2, np, deque
+from core.shared_imports import time, cv2, np
 from core.utilities import show
 from hardware.robot import *
 from core.listener import listener
@@ -13,15 +13,11 @@ class LineFollower:
 
         # Follower
         self.straight_speed = 80          # max speed when error is near 0
-        self.corner_speed = 50            # speed when error is large
-        self.speed_ramp_error = 8        # abs(error) >= this means full corner_speed
+        self.corner_speed = 60            # speed when error is large
+        self.speed_ramp_error = 10        # abs(error) >= this means full corner_speed
         self.speed_approach = 60
-        self.proportional_gain = 7
-
-        # Smoothing
-        self.error_window_size = 5
-        self.error_history = deque(maxlen=self.error_window_size)
-
+        self.turn_multiplier = 8
+ 
         # Thresholding
         self.min_black_area = 5000
         self.base_black = 110
@@ -128,6 +124,7 @@ class LineFollower:
             oled.text("DG", 35, 12, size=30, clear=True)
 
             self._run_percent(self.dg_left_spin, self.dg_right_spin, self.dg_spin_time)
+            self._run_percent(0, 0, 0.2)
 
             self.run_till_camera(
                 self.dg_left_spin - 10,
@@ -136,7 +133,6 @@ class LineFollower:
                 text=["DOUBLE GREEN"],
                 timeout=self.dg_reacquire_timeout,
             )
-
             return
 
         # Display status
@@ -152,28 +148,17 @@ class LineFollower:
         else:
             oled.text("LINE", 25, 12, size=30, clear=True)
 
-        # Error (positive means line is to the right of center)
-        raw_error = float(self.angle - 90)
+        error = float(self.angle - 90)
+        self.turn = int(self.turn_multiplier * error)
 
-        # Running average to reduce twitching
-        self.error_history.append(raw_error)
-        average_error = sum(self.error_history) / len(self.error_history)
-
-        # Proportional turn
-        self.turn = int(self.proportional_gain * average_error)
-
-        # Speed ramp: faster when the error is closer to 0
-        error_magnitude = abs(average_error)
-
+        error_magnitude = abs(error)
         ramp = error_magnitude / float(self.speed_ramp_error)
         if ramp < 0.0:
             ramp = 0.0
         elif ramp > 1.0:
             ramp = 1.0
 
-        # Smooth ramp (prevents sudden speed jumps)
         ramp = ramp * ramp * (3.0 - 2.0 * ramp)
-
         base_speed = self.straight_speed + (self.corner_speed - self.straight_speed) * ramp
 
         # Keep turning authority so one motor does not hit the clamp too early
@@ -189,15 +174,13 @@ class LineFollower:
         left_percent = max(-100, min(100, left_percent))
         right_percent = max(-100, min(100, right_percent))
 
-        stuck, left_percent, right_percent = self.stuck_check(left_percent, right_percent, average_error)
+        stuck, left_percent, right_percent = self.stuck_check(left_percent, right_percent, error)
 
         left_percent = max(-100, min(100, left_percent))
         right_percent = max(-100, min(100, right_percent))
 
         self.robot_state.debug_text.append(f"ANGLE: {self.angle}")
-        self.robot_state.debug_text.append(f"ERROR: {average_error:.1f}")
         self.robot_state.debug_text.append(f"TURN: {self.turn}")
-        self.robot_state.debug_text.append(f"BASE: {base_speed:.1f}")
         self.robot_state.debug_text.append(f"SUM: {self.error_sum}")
         if stuck:
             self.robot_state.debug_text.append("STUCK")
@@ -294,18 +277,13 @@ class LineFollower:
             if self._wait_for_black_contour(timeout=0.8):
                 break
 
-        self._run_percent(-60, -60, 0.30)
-        self.align_to_contour_angle(threshold=3, timeout=10)
+        self.align_to_contour_angle(threshold=1, timeout=10)
 
-        self._run_percent(70, 70, 0.5)
-
-        if not self._move_and_check_black(0.5):
-            if not self._move_and_check_black(0.5):
-                if not self._move_and_check_black(0.5):
-                    self._run_percent(-40, -40, 1.0)
-
-        motors.run(0, 0)
-
+        if not self._move_and_check_black(0.8):
+            self._run_percent(0, 0, 1)
+            if not self._move_and_check_black(0.8):
+                self._run_percent(0, 0, 1)
+                self._run_percent(-70, -70, 1.7)
 
     def _wait_for_black_contour(self, timeout: float = 1.0) -> bool:
         start_time = time.perf_counter()
@@ -326,7 +304,6 @@ class LineFollower:
                 touches_bottom = any(p[0][1] >= bottom_y for p in self.black_contour)
                 if touches_bottom and cv2.contourArea(self.black_contour) > self.min_black_area:
                     return True
-
 
     def align_to_contour_angle(self, threshold: int = 4, timeout: float = 2.0) -> None:
         start_time = time.perf_counter()
@@ -371,13 +348,12 @@ class LineFollower:
                 motors.run(0, 0)
                 break
 
+            turn_rate = max(20, min(50, int(50 * abs(angle_error) / 10)))
+    
             if angle_error > 0:
-                self._run_percent(35, -35)
+                self._run_percent(turn_rate, -turn_rate)
             else:
-                self._run_percent(-35, 35)
-
-        motors.run(0, 0)
-
+                self._run_percent(-turn_rate, turn_rate)
 
     def _move_and_check_black(self, duration: float) -> bool:
         self._run_percent(70, 70, duration)
