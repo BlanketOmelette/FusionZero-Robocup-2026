@@ -158,14 +158,17 @@ def debug_lines(entries: list[str], padding: int = 2, separator: str = "|") -> N
 DISPLAY_ENABLED = True
 SAVE_ENABLED = True
 
+# multi window latest frame store
+_display_latest = {}
+_display_latest_lock = threading.Lock()
+_display_latest_event = threading.Event()
+
 _display_thread = None
-_display_queue: Queue = None
 _save_thread = None
 _save_queue: Queue = None
 _stop_evt = threading.Event()
 
 SAVE_EVERY_N = 5
-DISPLAY_QUEUE_MAX = 1
 SAVE_QUEUE_MAX = 2
 _save_i = 0
 
@@ -319,26 +322,26 @@ def _check_finalize_gesture() -> None:
         _gesture_state["armed"] = True
 
 
-def _display_worker(q: Queue):
+def _display_worker():
     while not _stop_evt.is_set():
-        try:
-            item = q.get(timeout=0.1)
-        except Empty:
-            continue
+        # wait until something new arrives, or wake periodically
+        _display_latest_event.wait(timeout=0.05)
+        _display_latest_event.clear()
 
-        if item is None:
-            break
+        with _display_latest_lock:
+            items = list(_display_latest.items())
 
-        frame, window_name = item
-        if isinstance(frame, np.ndarray):
-            cv2.imshow(window_name, frame)
-            cv2.waitKey(1)
+        # show all windows that have frames
+        for window_name, frame in items:
+            if isinstance(frame, np.ndarray):
+                cv2.imshow(window_name, frame)
+
+        cv2.waitKey(1)
 
     try:
         cv2.destroyAllWindows()
     except Exception:
         pass
-
 
 def _save_worker(q: Queue):
     global _meta_file
@@ -368,23 +371,20 @@ def _save_worker(q: Queue):
 def get_session_dir():
     return SESSION_DIR
 
-
 def start_display():
-    global _display_thread, _display_queue, _save_thread, _save_queue
+    global _display_thread, _save_thread, _save_queue
     _init_session()
 
     _stop_evt.clear()
 
     if _display_thread is None and DISPLAY_ENABLED:
-        _display_queue = Queue(maxsize=DISPLAY_QUEUE_MAX)
-        _display_thread = threading.Thread(target=_display_worker, args=(_display_queue,), daemon=True)
+        _display_thread = threading.Thread(target=_display_worker, daemon=True)
         _display_thread.start()
 
     if _save_thread is None and SAVE_ENABLED:
         _save_queue = Queue(maxsize=SAVE_QUEUE_MAX)
         _save_thread = threading.Thread(target=_save_worker, args=(_save_queue,), daemon=True)
         _save_thread.start()
-
 
 def put_text_on_image(image, debug_lines: list[str]):
     origin = [10, 20]
@@ -399,7 +399,7 @@ def put_text_on_image(image, debug_lines: list[str]):
 
 
 def show(frame: np.ndarray, name: str = "Display", display: bool = True, debug_lines: list[str] = None):
-    global _display_queue, _save_queue, _save_i
+    global _save_queue, _save_i
 
     _init_session()
 
@@ -412,17 +412,11 @@ def show(frame: np.ndarray, name: str = "Display", display: bool = True, debug_l
     # gesture check (can raise KeyboardInterrupt)
     _check_finalize_gesture()
 
-    # async display (keeps only latest)
-    if DISPLAY_ENABLED and display and _display_queue is not None:
-        while True:
-            try:
-                _display_queue.get_nowait()
-            except Exception:
-                break
-        try:
-            _display_queue.put_nowait((frame, name))
-        except Exception:
-            pass
+        # async display (latest per window)
+    if DISPLAY_ENABLED and display:
+        with _display_latest_lock:
+            _display_latest[name] = frame
+        _display_latest_event.set()
 
     # async saving
     if SAVE_ENABLED and _save_queue is not None:
@@ -563,16 +557,13 @@ def stop_display(
     out_name: str = FINALIZE_OUT_NAME,
     cleanup_on_success: bool = FINALIZE_CLEANUP_ON_SUCCESS,
 ):
-    global _display_thread, _display_queue, _save_thread, _save_queue
+    global _display_thread, _save_thread, _save_queue, _display_latest_event
 
+    # Stop signal + wake display thread (so it can exit immediately)
     _stop_evt.set()
+    _display_latest_event.set()  # wake display thread
 
-    if _display_queue is not None:
-        try:
-            _display_queue.put_nowait(None)
-        except Exception:
-            pass
-
+    # Keep save queue shutdown signal (unchanged)
     if _save_queue is not None:
         try:
             _save_queue.put_nowait(None)
@@ -585,11 +576,14 @@ def stop_display(
         _save_thread.join(timeout=1.0)
 
     _display_thread = None
-    _display_queue = None
     _save_thread = None
     _save_queue = None
 
     _close_session()
+
+    with _display_latest_lock: _display_latest.clear()   
+    _display_latest_event.clear()
+    _saved_frames.clear()
 
     # Finalize to MP4 after threads stop and timestamps flushed
     if finalize_video and SESSION_DIR is not None:
@@ -604,7 +598,6 @@ def stop_display(
                     blink(0.25)
                 except Exception:
                     pass
-
 
 def get_saved_frames():
     return _saved_frames
