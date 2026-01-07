@@ -20,7 +20,7 @@ class LineFollower:
  
         # Thresholding
         self.min_black_area = 5000
-        self.base_black = 110
+        self.base_black = 90
         self.bright_black = 180
 
         self.green_min_area = 10000

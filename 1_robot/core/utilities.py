@@ -189,7 +189,7 @@ _gesture_cfg = {
     "touch_count": 4,
     "hold_seconds": 3.0,
     "check_every": 0.03,      # seconds
-    "pressed_value": 0,       # for int sensors (common: 0 = pressed)
+    "pressed_value": 1,
     "action": "interrupt",    # "interrupt" or "flag"
 }
 
@@ -397,7 +397,6 @@ def put_text_on_image(image, debug_lines: list[str]):
         y = origin[1] + i * line_height
         cv2.putText(image, line, (origin[0], y), font, font_scale, color, thickness, cv2.LINE_AA)
 
-
 def show(frame: np.ndarray, name: str = "Display", display: bool = True, debug_lines: list[str] = None):
     global _save_queue, _save_i
 
@@ -427,7 +426,6 @@ def show(frame: np.ndarray, name: str = "Display", display: bool = True, debug_l
                 _save_queue.put_nowait((frame.copy(), ts))
             except Exception:
                 pass
-
 
 def _make_vfr_video_from_session(session_dir: str, out_name: str) -> str | None:
     sdir = Path(session_dir)

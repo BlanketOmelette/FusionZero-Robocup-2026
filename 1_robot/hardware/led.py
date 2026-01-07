@@ -27,6 +27,7 @@ class LED:
             time.sleep(delay)
 
     def close(self) -> None:
+        debug(["TERMINATION", f"LED", "✓"], [25, 25, 50])
         try:
             self.off()
         finally:

@@ -13,7 +13,8 @@ sudo apt-get install -y \
   python3 python3-pip python3-dev \
   i2c-tools v4l-utils \
   x11-apps \
-  ffmpeg
+  ffmpeg \
+  python3-torch
 
 # Camera stack (Bookworm and later uses rpicam-* apps)
 # These tools let you do: rpicam-hello --list-cameras

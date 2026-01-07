@@ -81,3 +81,4 @@ class Lasers:
         self._xshut_right.off()
         self._xshut_left.close()
         self._xshut_right.close()
+        debug(["TERMINATION", f"LASERS", "✓"], [25, 25, 50])
