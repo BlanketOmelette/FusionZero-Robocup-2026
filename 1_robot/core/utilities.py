@@ -189,7 +189,7 @@ _gesture_cfg = {
     "touch_count": 4,
     "hold_seconds": 3.0,
     "check_every": 0.03,      # seconds
-    "pressed_value": 1,       # for int sensors
+    "pressed_value": 1,
     "action": "interrupt",    # "interrupt" or "flag"
 }
 
