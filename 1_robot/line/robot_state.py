@@ -1,37 +1,8 @@
-class RobotState():
+class RobotState:
     def __init__(self):
-        # Constants
-        self.debug = True
-        self.timings = True
+        self._init_state()
 
-        # Variables
-        self.debug_text = []
-        
-        # self.count = {
-        #     "uphill": 0,
-        #     "downhill": 0,
-        #     "tilt_left": 0,
-        #     "tilt_right": 0,
-        #     "red": 0,
-        #     "silver": 0,
-        #     "touch": 0
-        # }
-         
-        # self.trigger = {
-        #     "uphill": False,
-        #     "downhill": False,
-        #     "tilt_left": False,
-        #     "tilt_right": False,
-        #     "seasaw": False,
-        #     "evacuation_zone": False
-        # }
-        
-        # self.last_downhill = self.last_uphill = 10000
-        # self.last_seen_silver = self.silver_count = self.main_loop_count = 0
-        # self.time_since_downhill = 0
-        # self.prev_downhill = False
-        
-    def reset(self):
+    def _init_state(self):
         # Constants
         self.debug = True
         self.timings = True
@@ -39,25 +10,67 @@ class RobotState():
         # Variables
         self.debug_text = []
         self.oled_put_text = None
-        
-        # self.count = {
-        #     "uphill": 0,
-        #     "downhill": 0,
-        #     "tilt_left": 0,
-        #     "tilt_right": 0,
-        #     "red": 0,
-        #     "silver": 0,
-        #     "touch": 0
-        # }
-        
-        # self.trigger["uphill"] = False
-        # self.trigger["downhill"] = False
-        # self.trigger["tilt_left"] = False
-        # self.trigger["tilt_right"] = False
-        # self.trigger["seasaw"] = False
-        
-        # self.last_downhill = self.last_uphill = 10000
-        # self.last_seen_silver = self.silver_count = self.main_loop_count = 0
-        # self.time_since_downhill = 0
-        # self.prev_downhill = False
-        
+
+        # Counters you will actually use
+        self.count = {
+            "main_loop": 0,
+            "silver": 0,
+            "red": 0,
+            "touch": 0,
+        }
+
+        # Triggers (latched until you clear them)
+        self.trigger = {
+            "evacuation_zone": False,
+        }
+
+        # Silver detection debounce state
+        self._silver_streak = 0
+        self._silver_cooldown = 0
+
+    def reset(self):
+        self._init_state()
+
+    def tick(self):
+        """Call once per line loop iteration."""
+        self.count["main_loop"] += 1
+        if self._silver_cooldown > 0:
+            self._silver_cooldown -= 1
+
+    def update_silver(
+        self,
+        confidence: float,
+        *,
+        threshold: float = 0.85,
+        consecutive: int = 3,
+        cooldown_frames: int = 25,
+    ) -> bool:
+        """
+        Feed per frame silver confidence here.
+        If confidence is >= threshold for `consecutive` frames, we trigger evac.
+        Returns True only on the frame it triggers.
+        """
+        if self._silver_cooldown > 0:
+            self._silver_streak = 0
+            return False
+
+        if confidence >= threshold:
+            self._silver_streak += 1
+        else:
+            self._silver_streak = 0
+
+        if self._silver_streak >= consecutive:
+            self._silver_streak = 0
+            self._silver_cooldown = cooldown_frames
+            self.count["silver"] += 1
+            self.trigger["evacuation_zone"] = True
+            return True
+
+        return False
+
+    def clear_evac_trigger(self):
+        self.trigger["evacuation_zone"] = False
+
+    def trigger_summary(self) -> str:
+        evac = 1 if self.trigger.get("evacuation_zone") else 0
+        return f"EVAC:{evac} SIL:{self.count['silver']}"
