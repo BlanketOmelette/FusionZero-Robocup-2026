@@ -11,7 +11,11 @@ from hardware.robot import *
 from line.robot_state import RobotState
 from line.line_follower import LineFollower
 
-import os
+from line.victim_detector import VictimModel
+
+VICTIM_MODEL_PATH = "/home/fusion/FusionZero-Robocup-2026/imx_model_out/network.rpk"
+victim_model = VictimModel.load(VICTIM_MODEL_PATH)
+
 
 record = True
 
@@ -72,19 +76,23 @@ def main() -> None:
                     robot_state.reset()
 
                     line_camera.stop()
-                    evac_camera.stop()
+                    # evac_camera.stop()
+                    victim_model.stop()
 
                 elif mode == 1:
+                    victim_model.stop()
                     line_camera.start()
-                    evac_camera.stop()
+                    # evac_camera.stop()
 
                 elif mode == 2:
-                    evac_camera.start()
-                    line_camera.start()
+                    # evac_camera.stop()
+                    line_camera.stop()
+                    victim_model.start()
 
                 else:
+                    victim_model.stop()
                     line_camera.stop()
-                    evac_camera.stop()
+                    # evac_camera.stop()
 
                 last_mode = mode
 
@@ -96,7 +104,7 @@ def main() -> None:
                 line.main(start_time, robot_state, line_follow, silver_detector)
 
             elif mode == 2:
-                evac.main(robot_state, evac_camera)
+                evac.main(robot_state, victim_model)
 
             elif mode == 3:
                 led.on()
@@ -142,7 +150,8 @@ def main() -> None:
         line_camera.close()
         oled.text("LineCam ✓", 70, 15)
 
-        evac_camera.close()
+        # evac_camera.close()
+        victim_model.stop()
         oled.text("EvacCam ✓", 70, 30)
 
         listener.stop()

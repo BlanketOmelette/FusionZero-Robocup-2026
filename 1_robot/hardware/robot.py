@@ -14,8 +14,8 @@ oled = OLED()
 line_camera = Camera("line")
 oled.text("LineCam ✓", 0, 0)
 
-evac_camera = Camera("evac")
-oled.text("EvacCam ✓", 0, 15)
+# evac_camera = Camera("evac")
+# oled.text("EvacCam ✓", 0, 15)
 
 motors = Motors()
 oled.text("Motor ✓", 0, 30)
