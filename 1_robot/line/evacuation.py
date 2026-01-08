@@ -8,6 +8,7 @@ from core.shared_imports import time, np
 from core.utilities import show, debug_lines, health_tick
 from core.listener import listener
 from hardware.robot import motors, lasers, touch, imu, line_camera, led
+from line.silver_detector import SilverLineDetector
 
 
 # ----------------------------
@@ -20,15 +21,11 @@ def _clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
         return hi
     return x
 
-
 def _mm(v: int | None, default: int = 9999) -> int:
     return default if v is None else int(v)
 
-
 def _pressed(v: int) -> bool:
-    # touch.read(): released=1, pressed=0
-    return v == 0
-
+    return v == 1
 
 # ----------------------------
 # mission and states
@@ -41,7 +38,6 @@ class MissionPhase(Enum):
 
 
 class EvacState(Enum):
-    ENTER_ALIGN = auto()
     ENTER_DRIVE = auto()
 
     SEARCH_SPIN_FAST = auto()
@@ -55,6 +51,7 @@ class EvacState(Enum):
     TURN_AVOID = auto()
     HIT_RECOVER = auto()
     TILT_RECOVER = auto()
+    BOUNDARY_RECOVER = auto()
 
     DONE = auto()
 
@@ -72,31 +69,33 @@ class Detection:
 # ----------------------------
 class EvacController:
     # driving
-    BASE_FWD = 0.32
-    TURN_SPEED = 0.32
-    SPIN_FAST_SPEED = 0.35
-    SPIN_SLOW_SPEED = 0.22
+    BASE_FWD = 0.7
+    TURN_SPEED = 0.7
+    SPIN_FAST_SPEED = 0.4
+    SPIN_SLOW_SPEED = 0.3
 
     # thresholds
     FRONT_STOP_MM = 160
-    TILT_LIMIT_DEG = 18
+    TILT_LIMIT_DEG = 15
 
-    # enter timing (tune)
-    ENTER_ALIGN_SECONDS = 0.35
-    ENTER_DEEP_SECONDS = 1.30
+    # enter timing
+    ENTER_DEEP_SECONDS = 0.7
 
-    # recovery timing (tune)
+    # recovery timing
     HIT_BACK_SECONDS = 0.35
     HIT_TURN_SECONDS = 0.45
     TILT_BACK_SECONDS = 0.45
     TILT_TURN_SECONDS = 0.50
+    BOUNDARY_BACK_SECONDS = 0.35
+    BOUNDARY_TURN_SECONDS = 0.50
+    BOUNDARY_COOLDOWN_SECONDS = 0.7
 
     # exit detection (still cheap)
     EXIT_BLACK_RATIO = 0.22
     EXIT_STREAK = 4
 
     def __init__(self) -> None:
-        self.state: EvacState = EvacState.ENTER_ALIGN
+        self.state: EvacState = EvacState.ENTER_DRIVE
         self.phase: MissionPhase = MissionPhase.COLLECT_VICTIMS
 
         self.t0 = time.perf_counter()
@@ -104,6 +103,9 @@ class EvacController:
 
         self.turn_dir = +1  # +1 right, -1 left
         self.exit_seen = 0
+        self.entered_evac = False
+        self.boundary_cooldown_until = 0.0
+
 
         # victim bookkeeping
         self.live_count = 0
@@ -125,6 +127,8 @@ class EvacController:
         self.state_timeout = 0.0
         self.turn_dir = +1
         self.exit_seen = 0
+        self.entered_evac = False
+        self.boundary_cooldown_until = 0.0
         self.live_count = 0
         self.dead_count = 0
         self.target = None
@@ -153,7 +157,6 @@ class EvacController:
     def read_imu(self) -> list[int]:
         ang = imu.read()
         return [0, 0, 0] if ang is None else ang
-
     # ----------------------------
     # safety checks
     # ----------------------------
@@ -200,19 +203,18 @@ class EvacController:
         return []
 
     def detect_entry_silver_line(self, line_frame) -> bool:
-        # TODO: run your silver entry detector on line_frame
-        return False
-
-    def detect_exit_black_line(self, line_frame) -> bool:
-        # Cheap placeholder, same style as your old exit detector
         if line_frame is None:
             return False
-        h = line_frame.shape[0]
-        band = line_frame[int(h * 0.70) :, :]
-        if band.size == 0:
+
+        prob = self.silver.predict(line_frame)  # example
+        return prob > 0.9
+
+    def detect_exit_black_line(self, line_frame) -> bool:
+        if line_frame is None:
             return False
-        ch = band[..., 0]
-        black = ch < 60
+
+        ch = line_frame[..., 0]
+        black = ch < 30
         ratio = float(black.mean())
         return ratio > self.EXIT_BLACK_RATIO
 
@@ -395,25 +397,13 @@ class EvacController:
         # ----------------------------
         # state machine
         # ----------------------------
-        if self.state == EvacState.ENTER_ALIGN:
-            # choose direction based on which side is more open
-            self.turn_dir = -1 if left > right else +1
-
-            # turn on spot a little
-            s = 0.28
-            if self.turn_dir < 0:
-                motors.run(-s, +s)
-            else:
-                motors.run(+s, -s)
-
-            if self._t() >= self.ENTER_ALIGN_SECONDS:
-                self._set(EvacState.ENTER_DRIVE, timeout=self.ENTER_DEEP_SECONDS)
-
         elif self.state == EvacState.ENTER_DRIVE:
-            # drive "deep" into evac zone
             motors.run(self.BASE_FWD, self.BASE_FWD)
+            
             if self._time_up():
+                self.entered_evac = True
                 self._set(EvacState.SEARCH_SPIN_FAST, timeout=self.plan_spin_fast_seconds())
+
 
         elif self.state == EvacState.SEARCH_SPIN_FAST:
             s = self.SPIN_FAST_SPEED
