@@ -15,7 +15,7 @@ _PRESETS = {
         "size": (320, 200),
         "roi": (0, 0, 320, 200),
         "vflip": True,
-        "hflip": False,
+        "hflip": True,
         "target_fps": 30,
     },
 }
