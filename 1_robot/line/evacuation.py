@@ -4,7 +4,7 @@ import random
 from core.shared_imports import time
 from core.listener import listener
 from core.utilities import show
-from hardware.robot import motors, led, touch, lasers
+from hardware.robot import motors, led, touch, lasers, servos
 
 from line.victim_detector import VictimDetector, VictimModel
 
@@ -22,8 +22,8 @@ def _clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
 
 class Evac:
     def __init__(self) -> None:
-        self.entry_speed = 0.90
-        self.entry_seconds = 1.5
+        self.entry_speed = 0.60
+        self.entry_seconds = 1
 
         self.spin_fast_speed = 0.60
         self.spin_fast_min_s = 6.50
@@ -47,17 +47,12 @@ class Evac:
 
         # Laser based approach tuning (mm)
         self.stop_mm = 50           # 5 cm
-        self.slow_start_mm = 250    # start slowing down at 25 cm (tune)
-        self.min_fwd = 0.12
-        self.max_fwd = 0.50         # max forward while tracking
+        self.slow_start_mm = 200    # start slowing down at 25 cm (tune)
+        self.min_fwd = 0.2
+        self.max_fwd = 0.60         # max forward while tracking
 
-        # Alignment (pixels, in cropped raw frame coords)
-        self.align_move_px = 30     # allow forward only if within +-30 px
         self.align_stop_px = 5      # final stop only within +-5 px
-        # Alignment hysteresis
-        self.align_hold_s = 0.30
-        self.aligned_until = 0.0
-
+        self.initial_align_px = 30
 
         self.reached_target = False
 
@@ -79,14 +74,11 @@ class Evac:
         self.kp = 1
         self.base_speed = 0.5
 
-        # stop when close (bbox area ratio on display frame)
-        self.close_area = 0.3
-
         # display dims (matches your detector display_size)
         self.disp_w = 800
         self.disp_h = 600
 
-
+        self.did_grab = False
 
     def reset(self) -> None:
         self._did_entry = False
@@ -97,9 +89,7 @@ class Evac:
         self.track_until = 0.0
         self.target_det = None
         self.reached_target = False
-        self.aligned_until = 0.0
-
-
+        self.did_grab = False
 
         motors.run(0.0, 0.0)
 
@@ -148,7 +138,16 @@ class Evac:
         # closest proxy: biggest height, then area, then score
         return max(pool, key=lambda d: (d.h, d.w * d.h, d.score))
 
-
+    def _grab_victim(self) -> None:
+        # blocking: run then done
+        motors.run(0.0, 0.0)
+        servos.grab_down()
+        motors.run(0.7, 0.7, 0.15)
+        motors.run(0.0, 0.0, 0.3)
+        servos.grab_dump(1.5)
+        servos.grab_partial(0.5)
+        servos.grab_dump(0.5)
+        print("grabbed")
 
     def _ensure_ball_ids(self) -> None:
         if self.ball_labels_ready:
@@ -185,10 +184,6 @@ class Evac:
     def step_motion(self) -> None:
         now = time.perf_counter()
 
-        if self.reached_target:
-            motors.run(0.0, 0.0)
-            return
-
         if self.target_det is not None and now < self.track_until:
             # Touch still has priority
             self._touch_interrupt()
@@ -211,32 +206,23 @@ class Evac:
             dist = self._front_mm()
             if dist is None:
                 dist = 9999
+            print("Evac distance mm:", dist)
 
             # If we're very close, do not drive forward, just center
             if dist <= self.stop_mm:
                 if abs_err_px <= self.align_stop_px:
-                    self.reached_target = True
-                    motors.run(0.0, 0.0)
-                    return
+                    if not self.did_grab:
+                        self.did_grab = True
+                        self._grab_victim()
+                    # self.reached_target = True
+                else: motors.run(-0.3+turn, -0.3-turn)
 
-                # pivot only to center
-                motors.run(turn, -turn)
                 return
-
-            # If we're within the move window, "latch" alignment for a short time
-            if abs_err_px <= self.align_move_px:
-                self.aligned_until = now + self.align_hold_s
-
-            aligned = now < self.aligned_until
-
-            # Not close yet: only move forward if recently aligned (hysteresis)
-            if not aligned:
-                motors.run(turn, -turn)
-                return
-
 
             # Speed ramp: slow down as we approach stop_mm
-            if dist >= self.slow_start_mm:
+            if abs_err_px > self.initial_align_px:
+                fwd = 0.1
+            elif dist >= self.slow_start_mm:
                 fwd = self.max_fwd
             else:
                 t = (dist - self.stop_mm) / float(self.slow_start_mm - self.stop_mm)  # 0..1
@@ -247,6 +233,7 @@ class Evac:
             right = _clamp(fwd - turn)
             motors.run(left, right)
             return
+        else: self.reached_target = False
 
         if self.state not in ("BUMP_BACK", "BUMP_FWD"):
             self._touch_interrupt()
@@ -294,7 +281,7 @@ class Evac:
         if self.detector is None:
             self.detector = VictimDetector(
                 victim_model,
-                crop_top_px=70,          # crop top 70 px
+                crop_top_px=70,
                 score_thresh=0.30,
                 max_dets=50,
                 display_size=(800, 600),
@@ -323,6 +310,7 @@ class Evac:
         if t is not None:
             self.target_det = t
             self.track_until = now + self.track_hold_s
+            self.did_grab = False
         elif now >= self.track_until:
             self.target_det = None
 
@@ -356,7 +344,10 @@ def main(robot_state=None, victim_model: VictimModel | None = None) -> None:
         if time.perf_counter() >= _evac._entry_deadline:
             motors.run(0.0, 0.0)
             _evac._did_entry = True
+            _evac.spin_dir = 1 if lasers.read()[1] < lasers.read()[2] else -1
             _evac._start_spin_fast()
+        
+        _evac.step_vision(victim_model)
         return
 
     _evac.step_vision(victim_model)
