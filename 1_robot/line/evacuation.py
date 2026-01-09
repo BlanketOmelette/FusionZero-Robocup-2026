@@ -15,16 +15,18 @@ TOUCH_PRESSED_VALUE = 1
 def _pressed(v: int) -> bool:
     return v == TOUCH_PRESSED_VALUE
 
+
 def _clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return lo if x < lo else hi if x > hi else x
 
 
-
 class Evac:
     def __init__(self) -> None:
-        self.entry_speed = 0.60
-        self.entry_seconds = 1
+        # Entry
+        self.entry_speed = 0.50
+        self.entry_seconds = 1.0
 
+        # Search states
         self.spin_fast_speed = 0.60
         self.spin_fast_min_s = 6.50
         self.spin_fast_max_s = 6.85
@@ -46,35 +48,28 @@ class Evac:
         self.spin_dir = 1
 
         # Laser based approach tuning (mm)
-        self.stop_mm = 50           # 5 cm
-        self.slow_start_mm = 200    # start slowing down at 25 cm (tune)
+        self.stop_mm = 50
+        self.slow_start_mm = 200
         self.min_fwd = 0.2
-        self.max_fwd = 0.60         # max forward while tracking
+        self.max_fwd = 0.60
 
-        self.align_stop_px = 5      # final stop only within +-5 px
-        self.initial_align_px = 30
-
-        self.reached_target = False
+        self.align_stop_px = 5
+        self.initial_align_px = 200
 
         self._did_entry = False
         self._entry_deadline = 0.0
 
         self.detector: VictimDetector | None = None
         self.last_dets = []
-        
-        # --- Ball tracking (simple P controller) ---
-        self.ball_labels_ready = False
-        self.ball_cls_ids: set[int] = set()
 
-        # Victim tracking (P controller)
+        # Victim tracking
         self.track_hold_s = 0.25
         self.track_until = 0.0
-        self.target_det = None   # best victim detection to chase
+        self.target_det = None
 
-        self.kp = 1
-        self.base_speed = 0.5
+        self.kp = 0.5
 
-        # display dims (matches your detector display_size)
+        # display dims
         self.disp_w = 800
         self.disp_h = 600
 
@@ -83,12 +78,14 @@ class Evac:
     def reset(self) -> None:
         self._did_entry = False
         self._entry_deadline = time.perf_counter() + self.entry_seconds
+
         self.state = "SPIN_FAST"
         self.deadline = 0.0
+        self.spin_dir = 1
+
         self.last_dets = []
         self.track_until = 0.0
         self.target_det = None
-        self.reached_target = False
         self.did_grab = False
 
         motors.run(0.0, 0.0)
@@ -119,27 +116,33 @@ class Evac:
         if _pressed(bl) or _pressed(br):
             self._set_state("BUMP_FWD", self.bump_fwd_s)
             return
-    
+
     def _front_mm(self) -> int | None:
-        f, l, r = lasers.read()  # mm, may be None
+        f, l, r = lasers.read()
         if f is not None:
             return f
         vals = [v for v in (l, r) if v is not None]
         return min(vals) if vals else None
 
-
     def _pick_target(self, dets):
         live = [d for d in dets if d.cls == 1]
         dead = [d for d in dets if d.cls == 0]
-        pool = live if live else dead
-        if not pool:
-            return None
 
-        # closest proxy: biggest height, then area, then score
-        return max(pool, key=lambda d: (d.h, d.w * d.h, d.score))
+        if live:
+            cx_screen = 0.5 * self.disp_w
+
+            def live_key(d):
+                cx = d.x + 0.5 * d.w
+                center_err = abs(cx - cx_screen)          # smaller is better
+                return (center_err, -d.score, -(d.w * d.h), -d.h)
+
+            return min(live, key=live_key)
+
+        if dead: return max(dead, key=lambda d: (d.h, d.w * d.h, d.score))
+
+        return None
 
     def _grab_victim(self) -> None:
-        # blocking: run then done
         motors.run(0.0, 0.0)
         servos.grab_down()
         motors.run(0.7, 0.7, 0.15)
@@ -149,83 +152,41 @@ class Evac:
         servos.grab_dump(0.5)
         print("grabbed")
 
-    def _ensure_ball_ids(self) -> None:
-        if self.ball_labels_ready:
-            return
-        self.ball_labels_ready = True
-
-        if self.detector is None:
-            return
-
-        labels = getattr(self.detector.model, "labels", None)
-        if not labels:
-            return
-
-        for i, lab in enumerate(labels):
-            if lab and "ball" in lab.lower():
-                self.ball_cls_ids.add(i)
-
-    def _best_ball_det(self, dets, frame_w: int, frame_h: int):
-        # If we couldn't find a "ball" label, do nothing (you can hardcode ids later)
-        if not self.ball_cls_ids:
-            return None
-
-        best = None
-        best_score = -1.0
-        for d in dets:
-            if d.cls not in self.ball_cls_ids:
-                continue
-            if d.score > best_score:
-                best_score = d.score
-                best = d
-        return best
-
-
     def step_motion(self) -> None:
         now = time.perf_counter()
 
         if self.target_det is not None and now < self.track_until:
-            # Touch still has priority
             self._touch_interrupt()
             if self.state in ("BUMP_BACK", "BUMP_FWD"):
                 return
 
             d = self.target_det
 
-            # Compute alignment error in pixels
             cx = d.x + 0.5 * d.w
             x_err_px = cx - (0.5 * self.disp_w)
             abs_err_px = abs(x_err_px)
 
-            # Turn (P)
-            err = x_err_px / (0.5 * self.disp_w)  # approx -1..1
+            err = x_err_px / (0.5 * self.disp_w)
             turn = _clamp(self.kp * err)
             turn = _clamp(turn, -0.45, 0.45)
 
-            # Distance from front laser
             dist = self._front_mm()
             if dist is None:
                 dist = 9999
             print("Evac distance mm:", dist)
 
-            # If we're very close, do not drive forward, just center
             if dist <= self.stop_mm:
                 if abs_err_px <= self.align_stop_px:
                     if not self.did_grab:
                         self.did_grab = True
                         self._grab_victim()
-                    # self.reached_target = True
-                else: motors.run(-0.3+turn, -0.3-turn)
-
+                else: motors.run(-0.25 + turn, -0.25 - turn)
                 return
 
-            # Speed ramp: slow down as we approach stop_mm
-            if abs_err_px > self.initial_align_px:
-                fwd = 0.1
-            elif dist >= self.slow_start_mm:
-                fwd = self.max_fwd
+            if abs_err_px > self.initial_align_px: fwd = 0.1
+            elif dist >= self.slow_start_mm: fwd = self.max_fwd
             else:
-                t = (dist - self.stop_mm) / float(self.slow_start_mm - self.stop_mm)  # 0..1
+                t = (dist - self.stop_mm) / float(self.slow_start_mm - self.stop_mm)
                 t = _clamp(t, 0.0, 1.0)
                 fwd = self.min_fwd + t * (self.max_fwd - self.min_fwd)
 
@@ -233,7 +194,6 @@ class Evac:
             right = _clamp(fwd - turn)
             motors.run(left, right)
             return
-        else: self.reached_target = False
 
         if self.state not in ("BUMP_BACK", "BUMP_FWD"):
             self._touch_interrupt()
@@ -296,13 +256,9 @@ class Evac:
 
         show(disp, name="EVAC", display=True)
 
-        # Decide whether we're tracking a ball
-        self._ensure_ball_ids()
-
-        # IMPORTANT: det coords are in the cropped raw frame coords (before display resize)
-        H0, W0 = frame.shape[:2]          # raw frame
+        H0, W0 = frame.shape[:2]
         self.disp_w = W0
-        self.disp_h = max(1, H0 - 70)     # cropped height
+        self.disp_h = max(1, H0 - 70)
 
         now = time.perf_counter()
         t = self._pick_target(dets)
@@ -313,8 +269,6 @@ class Evac:
             self.did_grab = False
         elif now >= self.track_until:
             self.target_det = None
-
-
 
 
 _evac: Evac | None = None
@@ -339,15 +293,18 @@ def main(robot_state=None, victim_model: VictimModel | None = None) -> None:
         led.on()
         _was_mode2 = True
 
+    # ENTRY
     if not _evac._did_entry:
         motors.run(_evac.entry_speed, _evac.entry_speed)
+
+        # warm up the model during entry (first call may be slow)
+        _evac.step_vision(victim_model)
+
         if time.perf_counter() >= _evac._entry_deadline:
             motors.run(0.0, 0.0)
             _evac._did_entry = True
             _evac.spin_dir = 1 if lasers.read()[1] < lasers.read()[2] else -1
             _evac._start_spin_fast()
-        
-        _evac.step_vision(victim_model)
         return
 
     _evac.step_vision(victim_model)

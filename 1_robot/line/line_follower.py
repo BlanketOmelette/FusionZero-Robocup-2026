@@ -19,8 +19,8 @@ class LineFollower:
         self.turn_multiplier = 8
  
         # Thresholding
-        self.min_black_area = 5000
-        self.base_black = 90
+        self.min_black_area = 3000
+        self.base_black = 80
         self.bright_black = 180
 
         self.green_min_area = 10000
