@@ -34,7 +34,8 @@ import numpy as np
 # Raspberry Pi / Camera
 # =========================
 from RPi import GPIO
-from gpiozero import DigitalOutputDevice, DigitalInputDevice, Button
+from gpiozero import DigitalOutputDevice, DigitalInputDevice, Button, Servo
+from gpiozero.pins.lgpio import LGPIOFactory
 from rpi_hardware_pwm import HardwarePWM
 from picamera2 import Picamera2
 from libcamera import Transform

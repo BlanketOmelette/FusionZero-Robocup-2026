@@ -18,6 +18,8 @@ victim_model = VictimModel.load(VICTIM_MODEL_PATH)
 
 
 record = True
+servos.grab_dump(1.5)
+servos.dump_center()
 
 robot_state = RobotState()
 line_follow = LineFollower(robot_state)

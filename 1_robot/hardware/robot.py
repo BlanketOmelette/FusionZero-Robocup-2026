@@ -5,9 +5,9 @@ from hardware.camera import Camera
 from hardware.imu import IMU
 from hardware.led import LED
 from hardware.oled import OLED
+from hardware.servos import Servos
 from core.shared_imports import GPIO
 GPIO.setmode(GPIO.BCM)
-
 
 oled = OLED()
 
@@ -16,6 +16,9 @@ oled.text("LineCam ✓", 0, 0)
 
 # evac_camera = Camera("evac")
 # oled.text("EvacCam ✓", 0, 15)
+
+servos = Servos()
+oled.text("Servos ✓", 0, 15)
 
 motors = Motors()
 oled.text("Motor ✓", 0, 30)
